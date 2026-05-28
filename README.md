@@ -83,40 +83,42 @@ The packaged output is written under `src-tauri/target/release/bundle/`. On Wind
 - SQLite schema with high-volume indexes and FTS search.
 - Tauri commands for recursive scan start, track analysis, and playlist export.
 - Recursive Rust folder scanning for supported audio extensions.
+- **Work in Progress**: Audio tag reading (ID3, Vorbis, etc.) via lofty crate - basic implementation present but not yet fully integrated into UI workflow.
 
 ## Backend Roadmap
 
 1. Scanner engine
-   - Recursive folder walk with ignore rules.
-   - Incremental scanning from file size, mtime, and content hash.
-   - Portable root mapping for external drives.
-   - Watch-folder event ingestion.
-   - Crash-resumable job state.
+    - Recursive folder walk with ignore rules.
+    - Incremental scanning from file size, mtime, and content hash.
+    - Portable root mapping for external drives.
+    - Watch-folder event ingestion.
+    - Crash-resumable job state.
 
-2. Metadata engine
-   - Read/write tags across MP3, FLAC, WAV, AIFF, OGG, M4A/AAC, OPUS, WMA, and ALAC.
-   - Batch editor and filename parser/generator.
-   - Artwork read/write with multiple embedded images.
-   - Tag consistency validation.
+2. Metadata engine **[WORK IN PROGRESS]**
+    - Read/write tags across MP3, FLAC, WAV, AIFF, OGG, M4A/AAC, OPUS, WMA, and ALAC.
+    - Batch editor and filename parser/generator.
+    - Artwork read/write with multiple embedded images.
+    - Tag consistency validation.
+    - **Current Status**: Basic tag reading via lofty crate implemented in Rust backend and frontend types, but not yet fully integrated into analysis pipeline and UI workflow.
 
 3. Analysis engine
-   - FFmpeg-backed decode pipeline.
-   - BPM estimation with transient detection, spectral flux, autocorrelation, and genre-aware correction.
-   - Musical key estimation with chroma/HPCP profiles, Camelot/Open Key/classical mappings, confidence scoring, and key-change hints.
-   - Loudness, ReplayGain, peak/RMS, dynamic range, intro/outro, breakdown/drop markers, waveform and spectrogram caches.
+    - FFmpeg-backed decode pipeline.
+    - BPM estimation with transient detection, spectral flux, autocorrelation, and genre-aware correction.
+    - Musical key estimation with chroma/HPCP profiles, Camelot/Open Key/classical mappings, confidence scoring, and key-change hints.
+    - Loudness, ReplayGain, peak/RMS, dynamic range, intro/outro, breakdown/drop markers, waveform and spectrogram caches.
 
 4. DJ workflow
-   - Harmonic compatibility scoring.
-   - BPM compatibility matching.
-   - Cue point editor.
-   - Smart playlists and crates.
-   - Rekordbox, Serato, Traktor, VirtualDJ, M3U, CSV, JSON, and XML imports/exports.
+    - Harmonic compatibility scoring.
+    - BPM compatibility matching.
+    - Cue point editor.
+    - Smart playlists and crates.
+    - Rekordbox, Serato, Traktor, VirtualDJ, M3U, CSV, JSON, and XML imports/exports.
 
 5. Advanced systems
-   - Audio fingerprint duplicate detection despite renamed files.
-   - Corrupt file detection.
-   - REST API and scripting hooks.
-   - Optional AI classifiers for genre, mood, vocal/instrumental, energy, and mix recommendations.
+    - Audio fingerprint duplicate detection despite renamed files.
+    - Corrupt file detection.
+    - REST API and scripting hooks.
+    - Optional AI classifiers for genre, mood, vocal/instrumental, energy, and mix recommendations.
 
 ## Database Notes
 

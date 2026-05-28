@@ -121,6 +121,19 @@ type NativeAnalysisResult = {
   codec?: string | null;
   energy?: number | null;
   analysis_version: string;
+  // Embedded tag fields — null/undefined when absent in the file
+  tag_title?: string | null;
+  tag_artist?: string | null;
+  tag_album?: string | null;
+  tag_album_artist?: string | null;
+  tag_genre?: string | null;
+  tag_label?: string | null;
+  tag_catalog?: string | null;
+  tag_year?: number | null;
+  tag_track_number?: number | null;
+  tag_comment?: string | null;
+  tag_isrc?: string | null;
+  tag_bpm?: number | null;
 };
 
 type NativeScanSummary = {
@@ -294,6 +307,26 @@ function App() {
   }
 
   async function openFolderPicker() {
+    // In Tauri, showDirectoryPicker only gives us a relative folder name —
+    // the browser sandbox never exposes the real absolute path. Passing a
+    // relative path to canUseNativeAnalysis() returns false, so every track
+    // falls through to the instant JS provisional analyser.
+    //
+    // Fix: in Tauri we skip the browser picker entirely and route through
+    // scanDesktopPath which calls start_scan with the absolute path,
+    // giving tracks real absolute paths that native analysis can use.
+    if (isTauriRuntime()) {
+      const path = desktopScanPath.trim();
+      if (!path) {
+        setToast("Enter the absolute folder path in the path field (e.g. D:\\Music), then click Scan Library");
+        return;
+      }
+      await scanDesktopPath(path);
+      return;
+    }
+
+    // Browser-only path below — relative paths are fine here because
+    // ffmpeg is never available in a browser context anyway.
     const picker = (window as WindowWithDirectoryPicker).showDirectoryPicker;
 
     if (picker) {
@@ -386,14 +419,20 @@ function App() {
       return;
     }
 
-    setToast(canUseNativeAnalysis(selected) ? `Native analysis: ${selected.title}...` : `Provisional analysis: ${selected.title}. Use native path scan for FFmpeg analysis.`);
+    setToast(`Analyzing: ${selected.title}...`);
     const analyzed = await analyzeTrackWithBestEngine(selected);
     setTracks((current) => current.map((track) => (track.id === selected.id ? analyzed : track)));
     setJobs((current) => [
       { id: `analysis-${Date.now()}`, name: `Analyzed ${selected.title}`, files: 1, state: "Complete", progress: 100 },
       ...current
     ]);
-    setToast(`${canUseNativeAnalysis(selected) ? "Native" : "Provisional"} analysis complete: ${selected.title}`);
+
+    if (analyzed.status === "Missing") {
+      setToast(`Analysis failed for ${selected.title}: FFmpeg not found on PATH`);
+    } else {
+      const engine = analyzed.tags.includes("analyzed") && canUseNativeAnalysis(selected) ? "Native" : "Provisional";
+      setToast(`${engine} analysis complete: ${selected.title} — ${analyzed.bpm} BPM, ${analyzed.openKey}`);
+    }
   }
 
   async function analyzePending() {
@@ -404,19 +443,27 @@ function App() {
       return;
     }
 
-    const nativeCount = pending.filter(canUseNativeAnalysis).length;
-    setToast(`Analyzing ${pending.length.toLocaleString()} pending tracks (${nativeCount.toLocaleString()} native, ${(pending.length - nativeCount).toLocaleString()} provisional)...`);
+    setToast(`Analyzing ${pending.length.toLocaleString()} pending tracks...`);
     const analyzedTracks = new Map<string, Track>();
     for (const track of pending) {
       analyzedTracks.set(track.id, await analyzeTrackWithBestEngine(track));
     }
+
+    const results = Array.from(analyzedTracks.values());
+    const failed = results.filter((t) => t.tags.includes("ffmpeg-unavailable")).length;
+    const succeeded = results.length - failed;
 
     setTracks((current) => current.map((track) => analyzedTracks.get(track.id) ?? track));
     setJobs((current) => [
       { id: `analysis-${Date.now()}`, name: "Library analysis pass", files: pending.length, state: "Complete", progress: 100 },
       ...current
     ]);
-    setToast(`Analyzed ${pending.length.toLocaleString()} pending tracks`);
+
+    if (failed > 0) {
+      setToast(`Analyzed ${succeeded.toLocaleString()} tracks (${failed.toLocaleString()} failed — FFmpeg not found on PATH)`);
+    } else {
+      setToast(`Analyzed ${succeeded.toLocaleString()} tracks`);
+    }
   }
 
   function autoClean() {
@@ -514,7 +561,7 @@ function App() {
             <input
               aria-label="Desktop scan folder path"
               onChange={(event) => setDesktopScanPath(event.target.value)}
-              placeholder="Optional native folder path, e.g. D:\\Music"
+              placeholder="Folder path — required in desktop app (e.g. D:\\Music or /home/user/Music)"
               value={desktopScanPath}
             />
           </div>
@@ -1123,13 +1170,26 @@ function analyzeTrack(track: Track): Track {
 async function analyzeTrackWithBestEngine(track: Track): Promise<Track> {
   if (canUseNativeAnalysis(track)) {
     try {
+      // Use explicit snake_case keys — Tauri v1 does not always camelCase-transform
+      // invoke arguments, so "trackId" would silently pass an empty string.
       const result = await invoke<NativeAnalysisResult>("analyze_track", {
-        trackId: track.id,
+        track_id: track.id,
         path: track.path
       });
       return applyNativeAnalysis(track, result);
     } catch (error) {
-      console.warn("Native analysis failed, using provisional analyzer", error);
+      const msg = formatError(error);
+      // Surface missing-ffmpeg errors as a permanent status rather than silently
+      // falling back and reporting "Native analysis complete" on the toast.
+      if (msg.toLowerCase().includes("ffmpeg") || msg.toLowerCase().includes("ffprobe")) {
+        console.error("FFmpeg not available:", msg);
+        return {
+          ...track,
+          status: "Missing",
+          tags: Array.from(new Set([...track.tags, "ffmpeg-unavailable"]))
+        };
+      }
+      console.warn("Native analysis failed, using provisional analyzer:", msg);
     }
   }
 
@@ -1143,19 +1203,53 @@ function canUseNativeAnalysis(track: Track) {
 function applyNativeAnalysis(track: Track, result: NativeAnalysisResult): Track {
   const fileType = result.codec?.toUpperCase() || track.fileType;
 
+  // Tag values take precedence over the filename-parsed placeholders, but we
+  // never overwrite with an empty string — keep the existing value if the tag
+  // is absent (null/undefined/empty).
+  function tagOr(tagValue: string | null | undefined, existing: string): string {
+    return tagValue?.trim() || existing;
+  }
+
+  // Build a label string: prefer the explicit label tag, fall back to
+  // album_artist if it differs from the track artist (common in DJ releases).
+  const label = tagOr(
+    result.tag_label,
+    (result.tag_album_artist && result.tag_album_artist !== result.tag_artist)
+      ? result.tag_album_artist
+      : track.label
+  );
+
+  // Merge tag-derived keywords into the tag cloud without duplicating.
+  const extraTags: string[] = ["analyzed", result.analysis_version];
+  if (result.tag_genre) extraTags.push(result.tag_genre.toLowerCase());
+  if (result.tag_isrc) extraTags.push(`isrc:${result.tag_isrc}`);
+  if (result.tag_catalog) extraTags.push(`cat:${result.tag_catalog}`);
+  if (result.tag_comment?.trim()) extraTags.push("has-comment");
+
   return {
     ...track,
+    // Signal-derived fields
     bpm: Math.round(result.bpm),
     confidence: Math.round(result.bpm_confidence),
     energy: result.energy ?? track.energy,
     key: result.classical_key,
     openKey: result.camelot_key || result.open_key,
+    // Technical probe fields
     bitrate: result.bitrate ? `${Math.round(result.bitrate / 1000)} kbps` : track.bitrate,
     duration: result.duration_ms ? formatDuration(result.duration_ms) : track.duration,
     fileType,
+    // Embedded tag fields — tag wins over filename-parsed placeholders
+    title: tagOr(result.tag_title, track.title),
+    artist: tagOr(result.tag_artist, track.artist),
+    album: tagOr(result.tag_album, track.album),
+    genre: tagOr(result.tag_genre, track.genre),
+    label,
+    catalog: tagOr(result.tag_catalog, track.catalog),
+    // Mood stays "Analyzed" if not previously set; genre drives mood in the
+    // provisional analyser but real tags don't carry a mood field.
     mood: track.mood === "Unsorted" ? "Analyzed" : track.mood,
     status: "Ready",
-    tags: Array.from(new Set([...track.tags, "analyzed", result.analysis_version]))
+    tags: Array.from(new Set([...track.tags, ...extraTags])),
   };
 }
 

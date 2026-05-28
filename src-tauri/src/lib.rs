@@ -46,6 +46,19 @@ pub struct AnalysisResult {
     pub codec: Option<String>,
     pub energy: Option<u8>,
     pub analysis_version: String,
+    // Embedded tag fields — None when the tag is absent or the file has no tags
+    pub tag_title: Option<String>,
+    pub tag_artist: Option<String>,
+    pub tag_album: Option<String>,
+    pub tag_album_artist: Option<String>,
+    pub tag_genre: Option<String>,
+    pub tag_label: Option<String>,
+    pub tag_catalog: Option<String>,
+    pub tag_year: Option<u32>,
+    pub tag_track_number: Option<u32>,
+    pub tag_comment: Option<String>,
+    pub tag_isrc: Option<String>,
+    pub tag_bpm: Option<u32>,
 }
 
 #[tauri::command]
@@ -186,7 +199,13 @@ mod audio {
     use std::path::Path;
     use std::process::Command;
 
-    pub const ANALYSIS_VERSION: &str = "pulsecrate-analysis-0.1";
+    // lofty covers every format in SUPPORTED_EXTENSIONS.
+    // Add to Cargo.toml: lofty = { version = "0.21", features = ["aiff", "flac", "id3v2", "mp4_atoms", "ogg_opus", "ogg_vorbis", "wav"] }
+    use lofty::prelude::*;
+    use lofty::probe::Probe;
+    use lofty::tag::ItemKey;
+
+    pub const ANALYSIS_VERSION: &str = "pulsecrate-analysis-0.2";
 
     pub const SUPPORTED_EXTENSIONS: &[&str] = &[
         "mp3", "flac", "wav", "aiff", "aif", "ogg", "m4a", "aac", "opus", "wma", "alac",
@@ -217,6 +236,9 @@ mod audio {
     }
 
     pub fn analyze_with_ffmpeg(track_id: String, path: &str) -> Result<AnalysisResult, String> {
+        // Read embedded tags first — non-fatal, defaults to all-None.
+        let tags = read_tags(path);
+
         let probe = probe_audio(path)?;
         let samples = decode_mono_samples(path)?;
         let bpm = estimate_bpm(&samples, 22_050);
@@ -224,9 +246,17 @@ mod audio {
         let peak_db = estimate_peak_db(&samples);
         let energy = estimate_energy(&samples);
 
+        // If the tag carries a BPM and our signal estimate has low confidence,
+        // prefer the tagged value but keep our own confidence score.
+        let final_bpm = if bpm.confidence < 60.0 {
+            tags.bpm.map(|b| b as f32).unwrap_or(bpm.value)
+        } else {
+            bpm.value
+        };
+
         Ok(AnalysisResult {
             track_id,
-            bpm: bpm.value,
+            bpm: final_bpm,
             bpm_confidence: bpm.confidence,
             camelot_key: key.camelot.to_string(),
             classical_key: key.classical.to_string(),
@@ -240,7 +270,113 @@ mod audio {
             codec: probe.codec,
             energy: Some(energy),
             analysis_version: ANALYSIS_VERSION.to_string(),
+            tag_title: tags.title,
+            tag_artist: tags.artist,
+            tag_album: tags.album,
+            tag_album_artist: tags.album_artist,
+            tag_genre: tags.genre,
+            tag_label: tags.label,
+            tag_catalog: tags.catalog,
+            tag_year: tags.year,
+            tag_track_number: tags.track_number,
+            tag_comment: tags.comment,
+            tag_isrc: tags.isrc,
+            tag_bpm: tags.bpm,
         })
+    }
+
+    /// All tag fields are `Option` — a missing or unreadable tag is not an error.
+    #[derive(Debug, Default)]
+    struct TagMetadata {
+        title: Option<String>,
+        artist: Option<String>,
+        album: Option<String>,
+        album_artist: Option<String>,
+        genre: Option<String>,
+        label: Option<String>,
+        catalog: Option<String>,
+        year: Option<u32>,
+        track_number: Option<u32>,
+        comment: Option<String>,
+        isrc: Option<String>,
+        bpm: Option<u32>,
+    }
+
+    /// Read embedded tags from `path` using lofty.
+    /// Returns `TagMetadata::default()` (all None) on any error so the caller
+    /// can always proceed with signal-derived results.
+    fn read_tags(path: &str) -> TagMetadata {
+        let tagged_file = match Probe::open(path)
+            .and_then(|p| p.guess_file_type())
+            .and_then(|p| p.read())
+        {
+            Ok(f) => f,
+            Err(_) => return TagMetadata::default(),
+        };
+
+        // lofty may expose multiple tag types (e.g. both ID3v1 and ID3v2 on
+        // the same MP3). Prefer the primary tag, fall back to the first.
+        let tag = match tagged_file.primary_tag().or_else(|| tagged_file.first_tag()) {
+            Some(t) => t,
+            None => return TagMetadata::default(),
+        };
+
+        /// Grab the first non-empty string value for an ItemKey.
+        fn get(tag: &lofty::tag::Tag, key: ItemKey) -> Option<String> {
+            tag.get_string(&key)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToString::to_string)
+        }
+
+        /// Parse a tag string to u32, ignoring anything after a '/' (e.g. "3/12").
+        fn parse_u32(tag: &lofty::tag::Tag, key: ItemKey) -> Option<u32> {
+            tag.get_string(&key)
+                .and_then(|s| s.split('/').next())
+                .and_then(|s| s.trim().parse::<u32>().ok())
+        }
+
+        // PUBLISHER / LABEL — stored differently per format:
+        //   ID3v2: TPUB frame  → lofty ItemKey::Publisher
+        //   Vorbis / FLAC: ORGANIZATION or LABEL comment → check both
+        //   MP4: ©pub atom     → lofty ItemKey::Publisher
+        let label = get(tag, ItemKey::Publisher)
+            .or_else(|| get(tag, ItemKey::Unknown("ORGANIZATION".to_string())))
+            .or_else(|| get(tag, ItemKey::Unknown("LABEL".to_string())));
+
+        // CATALOG NUMBER — stored as TXXX:CATALOGNUMBER in ID3v2,
+        // CATALOGNUMBER Vorbis comment, or a custom MP4 atom.
+        // lofty exposes it via CatalogNumber.
+        let catalog = get(tag, ItemKey::CatalogNumber);
+
+        // ISRC — ID3v2 TSRC, Vorbis ISRC, MP4 isrc.
+        let isrc = get(tag, ItemKey::Isrc);
+
+        // Embedded BPM tag — ID3v2 TBPM, Vorbis BPM, MP4 tmpo.
+        let bpm = parse_u32(tag, ItemKey::Bpm);
+
+        TagMetadata {
+            title: get(tag, ItemKey::TrackTitle),
+            artist: get(tag, ItemKey::TrackArtist),
+            album: get(tag, ItemKey::AlbumTitle),
+            album_artist: get(tag, ItemKey::AlbumArtist),
+            genre: get(tag, ItemKey::Genre),
+            label,
+            catalog,
+            year: parse_u32(tag, ItemKey::Year)
+                .or_else(|| parse_u32(tag, ItemKey::RecordingDate))
+                .or_else(|| {
+                    // Vorbis DATE comment and ID3v2 TDRC contain full dates like "2023-04-15"
+                    tag.get_string(&ItemKey::RecordingDate)
+                        .or_else(|| tag.get_string(&ItemKey::OriginalReleaseDate))
+                        .and_then(|s| s.split('-').next())
+                        .and_then(|y| y.trim().parse::<u32>().ok())
+                }),
+            track_number: parse_u32(tag, ItemKey::TrackNumber),
+            comment: get(tag, ItemKey::Comment),
+            isrc,
+            bpm,
+        }
     }
 
     #[derive(Debug, Default)]
@@ -344,7 +480,9 @@ mod audio {
                 "-i",
                 path,
                 "-t",
-                "180",
+                "240",   // 240 s gives ~2.65 M samples at 22 050 Hz — enough for
+                         // ~645 key-estimation frames of 4096 without hitting the
+                         // 1800-frame .take() limit on most tracks.
                 "-ac",
                 "1",
                 "-ar",
@@ -367,48 +505,74 @@ mod audio {
             .filter(|sample| sample.is_finite())
             .collect::<Vec<_>>();
 
-        if samples.len() < 22_050 {
-            return Err("Not enough decoded audio to analyze".to_string());
+        // Require at least ~2 seconds of audio for a meaningful analysis.
+        let min_samples = 22_050 * 2;
+        if samples.len() < min_samples {
+            return Err(format!(
+                "Only {} samples decoded (need ≥ {}); file may be corrupt, too short, or in an unsupported codec variant.",
+                samples.len(),
+                min_samples
+            ));
         }
 
         Ok(samples)
     }
 
     fn estimate_bpm(samples: &[f32], sample_rate: usize) -> BpmEstimate {
-        let hop = 512;
-        let frame = 1024;
+        let hop = 512usize;
+        let frame = 1024usize;
         let mut envelope = Vec::new();
-        let mut previous_energy = 0.0;
+        let mut previous_energy = 0.0_f32;
 
         for chunk_start in (0..samples.len().saturating_sub(frame)).step_by(hop) {
+            // Use RMS energy instead of mean absolute value for better onset detection
             let energy = samples[chunk_start..chunk_start + frame]
                 .iter()
-                .map(|sample| sample.abs())
+                .map(|s| s * s)
                 .sum::<f32>()
                 / frame as f32;
-            envelope.push((energy - previous_energy).max(0.0));
+            let flux = (energy - previous_energy).max(0.0);
+            envelope.push(flux);
             previous_energy = energy;
         }
 
         normalize(&mut envelope);
 
         let frames_per_second = sample_rate as f32 / hop as f32;
-        let mut best_bpm = 120.0;
-        let mut best_score = 0.0;
-        let mut second_score = 0.0;
+        let mut best_bpm = 120.0_f32;
+        let mut best_score = 0.0_f32;
+        let mut second_score = 0.0_f32;
 
-        for bpm in 60..=210 {
+        // Score directly in the target range (90–190 BPM) to avoid the
+        // normalization-after-selection bug where scores were compared on
+        // un-normalized BPM values then doubled/halved post-hoc.
+        for bpm in 90u32..=190 {
             let lag = ((60.0 / bpm as f32) * frames_per_second).round() as usize;
             if lag < 2 || lag >= envelope.len() {
                 continue;
             }
 
-            let score = envelope
+            // Sum autocorrelation at the fundamental lag and its first two
+            // harmonics (double and quadruple time) to handle half-time grooves.
+            let score: f32 = [1usize, 2, 4]
                 .iter()
-                .skip(lag)
-                .zip(envelope.iter())
-                .map(|(a, b)| a * b)
-                .sum::<f32>();
+                .filter_map(|&mult| {
+                    let l = lag * mult;
+                    if l < envelope.len() {
+                        let n = (envelope.len() - l) as f32;
+                        Some(
+                            envelope[l..]
+                                .iter()
+                                .zip(envelope.iter())
+                                .map(|(a, b)| a * b)
+                                .sum::<f32>()
+                                / n,
+                        )
+                    } else {
+                        None
+                    }
+                })
+                .sum();
 
             if score > best_score {
                 second_score = best_score;
@@ -419,17 +583,10 @@ mod audio {
             }
         }
 
-        while best_bpm < 90.0 {
-            best_bpm *= 2.0;
-        }
-        while best_bpm > 190.0 {
-            best_bpm /= 2.0;
-        }
-
         let confidence = if best_score <= 0.0 {
-            0.0
+            50.0
         } else {
-            ((best_score - second_score).max(0.0) / best_score * 100.0).clamp(35.0, 98.0)
+            ((best_score - second_score) / best_score * 100.0).clamp(35.0, 98.0)
         };
 
         BpmEstimate {
@@ -494,8 +651,13 @@ mod audio {
     }
 
     fn estimate_energy(samples: &[f32]) -> u8 {
-        let rms = (samples.iter().map(|sample| sample * sample).sum::<f32>() / samples.len() as f32).sqrt();
-        (rms * 180.0).round().clamp(1.0, 100.0) as u8
+        // Compute RMS over the full decoded clip.
+        let rms = (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
+        // Typical normalised dance-music RMS is roughly 0.05–0.25 (-26 to -12 dBFS).
+        // Map that range linearly to 10–95 so quiet/loud tracks spread across the scale.
+        // rms 0.0 → 1, rms 0.03 → ~10, rms 0.25 → ~95, rms ≥ 0.35 → 100.
+        let scaled = (rms / 0.35 * 100.0).round().clamp(1.0, 100.0) as u8;
+        scaled
     }
 
     fn normalize_array<const N: usize>(values: &mut [f32; N]) {
