@@ -1,3 +1,5 @@
+<img width="1344" height="768" alt="pulsecrate" src="https://github.com/user-attachments/assets/b4eceb19-d08e-4245-8550-f65149bc8549" />
+
 # Pulsecrate
 
 Pulsecrate is a modern desktop music library scanner and organizer for DJs, producers, and electronic music collectors. It is shaped for massive electronic music collections, fast metadata indexing, BPM/key analysis, harmonic browsing, duplicate detection, and professional DJ export workflows.
