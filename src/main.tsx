@@ -36,6 +36,22 @@ import "./styles.css";
 type TrackStatus = "Ready" | "Analyzing" | "Needs tags" | "Missing" | "Duplicate";
 type View = "Collection" | "Playlists" | "Analysis Queue" | "Duplicates" | "Watch Folders" | "Harmonic Match" | "Database Tools";
 
+interface TagFields {
+  // Embedded tag fields — null/undefined when absent in the file
+  tag_title?: string | null;
+  tag_artist?: string | null;
+  tag_album?: string | null;
+  tag_album_artist?: string | null;
+  tag_genre?: string | null;
+  tag_label?: string | null;
+  tag_catalog?: string | null;
+  tag_year?: number | null;
+  tag_track_number?: number | null;
+  tag_comment?: string | null;
+  tag_isrc?: string | null;
+  tag_bpm?: number | null;
+}
+
 type Track = {
   id: string;
   title: string;
@@ -59,7 +75,7 @@ type Track = {
   color: string;
   status: TrackStatus;
   dateAdded: string;
-};
+} & TagFields;
 
 type ScanJob = {
   id: string;
@@ -121,20 +137,7 @@ type NativeAnalysisResult = {
   codec?: string | null;
   energy?: number | null;
   analysis_version: string;
-  // Embedded tag fields — null/undefined when absent in the file
-  tag_title?: string | null;
-  tag_artist?: string | null;
-  tag_album?: string | null;
-  tag_album_artist?: string | null;
-  tag_genre?: string | null;
-  tag_label?: string | null;
-  tag_catalog?: string | null;
-  tag_year?: number | null;
-  tag_track_number?: number | null;
-  tag_comment?: string | null;
-  tag_isrc?: string | null;
-  tag_bpm?: number | null;
-};
+} & TagFields;
 
 type NativeScanSummary = {
   job_id: string;
@@ -188,38 +191,54 @@ function App() {
   const [keyFilter, setKeyFilter] = useState("All");
   const [bpmRange, setBpmRange] = useState<[number, number]>([80, 190]);
   const [editing, setEditing] = useState(false);
-  const [toast, setToast] = useState("Ready to scan your music collection");
-  const [desktopScanPath, setDesktopScanPath] = useState("");
-  const folderInputRef = useRef<HTMLInputElement | null>(null);
+   const [toast, setToast] = useState("Ready to scan your music collection");
+   const [desktopScanPath, setDesktopScanPath] = useState("");
+   const [yearFilter, setYearFilter] = useState<string | null>(null);
+   const [trackFilter, setTrackFilter] = useState<string | null>(null);
+   const [commentFilter, setCommentFilter] = useState<string | null>(null);
+   const [isrcFilter, setIsrcFilter] = useState<string | null>(null);
+   const [albumFilter, setAlbumFilter] = useState<string | null>(null);
+   const [albumArtistFilter, setAlbumArtistFilter] = useState<string | null>(null);
+   const [labelFilter, setLabelFilter] = useState<string | null>(null);
+   const [catalogFilter, setCatalogFilter] = useState<string | null>(null);
+   const folderInputRef = useRef<HTMLInputElement | null>(null);
 
   const selected = tracks.find((track) => track.id === selectedId);
   const compatibleKeys = selected ? harmonicNeighbors[selected.openKey] ?? [selected.openKey] : [];
   const genres = useMemo(() => ["All", ...Array.from(new Set(tracks.map((track) => track.genre)))], [tracks]);
   const keys = useMemo(() => ["All", ...Array.from(new Set(tracks.map((track) => track.openKey)))], [tracks]);
 
-  const filteredTracks = useMemo(() => {
-    const needle = search.trim().toLowerCase();
-    return tracks.filter((track) => {
-      const haystack = [
-        track.title,
-        track.artist,
-        track.album,
-        track.genre,
-        track.label,
-        track.catalog,
-        track.path,
-        track.mood,
-        track.tags.join(" ")
-      ].join(" ").toLowerCase();
+   const filteredTracks = useMemo(() => {
+     const needle = search.trim().toLowerCase();
+     return tracks.filter((track) => {
+       const haystack = [
+         track.title,
+         track.artist,
+         track.album,
+         track.genre,
+         track.label,
+         track.catalog,
+         track.path,
+         track.mood,
+         track.tags.join(" ")
+       ].join(" ").toLowerCase();
 
-      return (
-        (!needle || haystack.includes(needle)) &&
-        (genreFilter === "All" || track.genre === genreFilter) &&
-        (keyFilter === "All" || track.openKey === keyFilter) &&
-        (track.bpm === 0 || (track.bpm >= bpmRange[0] && track.bpm <= bpmRange[1]))
-      );
-    });
-  }, [bpmRange, genreFilter, keyFilter, search, tracks]);
+       return (
+         (!needle || haystack.includes(needle)) &&
+         (genreFilter === "All" || track.genre === genreFilter) &&
+         (keyFilter === "All" || track.openKey === keyFilter) &&
+         (track.bpm === 0 || (track.bpm >= bpmRange[0] && track.bpm <= bpmRange[1])) &&
+         (yearFilter == null || track.tag_year != null && String(track.tag_year) === yearFilter) &&
+         (trackFilter == null || track.tag_track_number != null && String(track.tag_track_number) === trackFilter) &&
+        (commentFilter == null || track.tag_comment != null && track.tag_comment.toLowerCase().includes(commentFilter.toLowerCase())) &&
+          (isrcFilter == null || track.tag_isrc != null && track.tag_isrc.toLowerCase().includes(isrcFilter.toLowerCase())) &&
+          (albumFilter == null || track.tag_album != null && track.tag_album.toLowerCase().includes(albumFilter.toLowerCase())) &&
+          (albumArtistFilter == null || track.tag_album_artist != null && track.tag_album_artist.toLowerCase().includes(albumArtistFilter.toLowerCase())) &&
+          (labelFilter == null || track.tag_label != null && track.tag_label.toLowerCase().includes(labelFilter.toLowerCase())) &&
+          (catalogFilter == null || track.tag_catalog != null && track.tag_catalog.toLowerCase().includes(catalogFilter.toLowerCase()))
+       );
+     });
+   }, [bpmRange, genreFilter, keyFilter, search, tracks, yearFilter, trackFilter, commentFilter, isrcFilter, albumFilter, albumArtistFilter, labelFilter, catalogFilter]);
 
   const stats = useMemo(() => {
     const analyzed = tracks.filter((track) => track.status === "Ready" || track.status === "Duplicate").length;
@@ -243,110 +262,110 @@ function App() {
     setToast("Track metadata updated");
   }
 
-  async function startScan() {
-    if (desktopScanPath.trim()) {
-      await scanDesktopPath(desktopScanPath.trim());
-      return;
-    }
+   async function startScan() {
+     if (desktopScanPath.trim()) {
+       await scanDesktopPath(desktopScanPath.trim());
+       return;
+     }
 
-    await openFolderPicker();
-  }
+     await openFolderPicker();
+   }
 
-  async function scanDesktopPath(path: string) {
-    if (!isTauriRuntime()) {
-      setToast("Desktop path scanning only works in the Tauri app. Browser folder scan will use provisional analysis.");
-      await openFolderPicker();
-      return;
-    }
+   async function scanDesktopPath(path: string) {
+     if (!isTauriRuntime()) {
+       setToast("Desktop path scanning only works in the Tauri app. Browser folder scan will use provisional analysis.");
+       await openFolderPicker();
+       return;
+     }
 
-    try {
-      setToast(`Scanning ${path} with native scanner...`);
-      const summary = await invoke<NativeScanSummary>("start_scan", {
-        request: {
-          roots: [path],
-          incremental: true,
-          watch: true
-        }
-      });
+     try {
+       setToast(`Scanning ${path} with native scanner...`);
+       const summary = await invoke<NativeScanSummary>("start_scan", {
+         request: {
+           roots: [path],
+           incremental: true,
+           watch: true
+         }
+       });
 
-      const importedTracks = createTracksFromNativeFiles(summary.files);
-      const importedPaths = new Set(importedTracks.map((track) => track.path));
-      const rootName = path;
+       const importedTracks = createTracksFromNativeFiles(summary.files);
+       const importedPaths = new Set(importedTracks.map((track) => track.path));
+       const rootName = path;
 
-      setWatchFolders((current) => [
-        {
-          id: `wf-${Date.now()}`,
-          path: rootName,
-          tracks: importedTracks.length,
-          enabled: true,
-          mounted: true,
-          lastScan: "Just now"
-        },
-        ...current.filter((folder) => folder.path !== rootName)
-      ]);
-      setTracks((current) => [
-        ...importedTracks,
-        ...current.filter((track) => !importedPaths.has(track.path))
-      ]);
-      setJobs((current) => [
-        {
-          id: String(summary.job_id),
-          name: rootName,
-          files: summary.queued_for_analysis,
-          state: "Ready for native analysis",
-          progress: 100
-        },
-        ...current
-      ]);
-      setSelectedId(importedTracks[0]?.id ?? "");
-      setToast(`Native scan found ${summary.discovered_files.toLocaleString()} supported audio files`);
-      setActiveView("Collection");
-    } catch (error) {
-      setToast(`Native scan failed: ${formatError(error)}`);
-    }
-  }
+       setWatchFolders((current) => [
+         {
+           id: `wf-${Date.now()}`,
+           path: rootName,
+           tracks: importedTracks.length,
+           enabled: true,
+           mounted: true,
+           lastScan: "Just now"
+         },
+         ...current.filter((folder) => folder.path !== rootName)
+       ]);
+       setTracks((current) => [
+         ...importedTracks,
+         ...current.filter((track) => !importedPaths.has(track.path))
+       ]);
+       setJobs((current) => [
+         {
+           id: String(summary.job_id),
+           name: rootName,
+           files: summary.queued_for_analysis,
+           state: "Ready for native analysis",
+           progress: 100
+         },
+         ...current
+       ]);
+       setSelectedId(importedTracks[0]?.id ?? "");
+       setToast(`Native scan found ${summary.discovered_files.toLocaleString()} supported audio files`);
+       setActiveView("Collection");
+     } catch (error) {
+       setToast(`Native scan failed: ${formatError(error)}`);
+     }
+   }
 
-  async function openFolderPicker() {
-    // In Tauri, showDirectoryPicker only gives us a relative folder name —
-    // the browser sandbox never exposes the real absolute path. Passing a
-    // relative path to canUseNativeAnalysis() returns false, so every track
-    // falls through to the instant JS provisional analyser.
-    //
-    // Fix: in Tauri we skip the browser picker entirely and route through
-    // scanDesktopPath which calls start_scan with the absolute path,
-    // giving tracks real absolute paths that native analysis can use.
-    if (isTauriRuntime()) {
-      const path = desktopScanPath.trim();
-      if (!path) {
-        setToast("Enter the absolute folder path in the path field (e.g. D:\\Music), then click Scan Library");
-        return;
+   async function openFolderPicker() {
+     // In Tauri, showDirectoryPicker only gives us a relative folder name —
+     // the browser sandbox never exposes the real absolute path. Passing a
+     // relative path to canUseNativeAnalysis() returns false, so every track
+     // falls through to the instant JS provisional analyser.
+     //
+     // Fix: in Tauri we skip the browser picker entirely and route through
+     // scanDesktopPath which calls start_scan with the absolute path,
+     // giving tracks real absolute paths that native analysis can use.
+     if (isTauriRuntime()) {
+       const path = desktopScanPath.trim();
+       if (!path) {
+         setToast("Enter the absolute folder path in the path field (e.g. D:\\Music), then click Scan Library");
+         return;
+       }
+       await scanDesktopPath(path);
+       return;
+     }
+
+     // Browser-only path below — relative paths are fine here because
+     // ffmpeg is never available in a browser context anyway.
+     const picker = (window as WindowWithDirectoryPicker).showDirectoryPicker;
+
+     if (picker) {
+       try {
+         const directory = await picker();
+         const audioFiles = await collectAudioFiles(directory, directory.name);
+         importPickedFiles(audioFiles, directory.name);
+         return;
+       } catch (error) {
+         if (error instanceof DOMException && error.name === "AbortError") {
+           setToast("Folder selection cancelled");
+           return;
+         }
+
+         setToast("Directory picker failed; using browser fallback");
+       }
       }
-      await scanDesktopPath(path);
-      return;
+  
+      folderInputRef.current?.click();
     }
-
-    // Browser-only path below — relative paths are fine here because
-    // ffmpeg is never available in a browser context anyway.
-    const picker = (window as WindowWithDirectoryPicker).showDirectoryPicker;
-
-    if (picker) {
-      try {
-        const directory = await picker();
-        const audioFiles = await collectAudioFiles(directory, directory.name);
-        importPickedFiles(audioFiles, directory.name);
-        return;
-      } catch (error) {
-        if (error instanceof DOMException && error.name === "AbortError") {
-          setToast("Folder selection cancelled");
-          return;
-        }
-
-        setToast("Directory picker failed; using browser fallback");
-      }
-    }
-
-    folderInputRef.current?.click();
-  }
 
   function handleFolderSelection(event: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.currentTarget.files ?? []);
@@ -435,36 +454,36 @@ function App() {
     }
   }
 
-  async function analyzePending() {
-    const pending = tracks.filter((track) => track.status !== "Ready");
+   async function analyzePending() {
+     const pending = tracks.filter((track) => track.status !== "Ready");
 
-    if (pending.length === 0) {
-      setToast("No pending tracks to analyze");
-      return;
-    }
+     if (pending.length === 0) {
+       setToast("No pending tracks to analyze");
+       return;
+     }
 
-    setToast(`Analyzing ${pending.length.toLocaleString()} pending tracks...`);
-    const analyzedTracks = new Map<string, Track>();
-    for (const track of pending) {
-      analyzedTracks.set(track.id, await analyzeTrackWithBestEngine(track));
-    }
+     setToast(`Analyzing ${pending.length.toLocaleString()} pending tracks...`);
+     const analyzedTracks = new Map<string, Track>();
+     for (const track of pending) {
+       analyzedTracks.set(track.id, await analyzeTrackWithBestEngine(track));
+     }
 
-    const results = Array.from(analyzedTracks.values());
-    const failed = results.filter((t) => t.tags.includes("ffmpeg-unavailable")).length;
-    const succeeded = results.length - failed;
+     const results = Array.from(analyzedTracks.values());
+     const failed = results.filter((t) => t.tags.includes("ffmpeg-unavailable")).length;
+     const succeeded = results.length - failed;
 
-    setTracks((current) => current.map((track) => analyzedTracks.get(track.id) ?? track));
-    setJobs((current) => [
-      { id: `analysis-${Date.now()}`, name: "Library analysis pass", files: pending.length, state: "Complete", progress: 100 },
-      ...current
-    ]);
+     setTracks((current) => current.map((track) => analyzedTracks.get(track.id) ?? track));
+     setJobs((current) => [
+       { id: `analysis-${Date.now()}`, name: "Library analysis pass", files: pending.length, state: "Complete", progress: 100 },
+       ...current
+     ]);
 
-    if (failed > 0) {
-      setToast(`Analyzed ${succeeded.toLocaleString()} tracks (${failed.toLocaleString()} failed — FFmpeg not found on PATH)`);
-    } else {
-      setToast(`Analyzed ${succeeded.toLocaleString()} tracks`);
-    }
-  }
+     if (failed > 0) {
+       setToast(`Analyzed ${succeeded.toLocaleString()} tracks (${failed.toLocaleString()} failed — FFmpeg not found on PATH)`);
+     } else {
+       setToast(`Analyzed ${succeeded.toLocaleString()} tracks`);
+     }
+   }
 
   function autoClean() {
     if (!selected) {
@@ -565,22 +584,54 @@ function App() {
               value={desktopScanPath}
             />
           </div>
-          <div className="filter-pills">
-            <select value={genreFilter} onChange={(event) => setGenreFilter(event.target.value)} aria-label="Genre filter">
-              {genres.map((genre) => <option key={genre}>{genre}</option>)}
-            </select>
-            <select value={keyFilter} onChange={(event) => setKeyFilter(event.target.value)} aria-label="Key filter">
-              {keys.map((key) => <option key={key}>{key}</option>)}
-            </select>
-            <label>
-              Min BPM
-              <input type="number" min="40" max="260" value={bpmRange[0]} onChange={(event) => setBpmRange([Number(event.target.value), bpmRange[1]])} />
-            </label>
-            <label>
-              Max BPM
-              <input type="number" min="40" max="260" value={bpmRange[1]} onChange={(event) => setBpmRange([bpmRange[0], Number(event.target.value)])} />
-            </label>
-          </div>
+           <div className="filter-pills">
+             <select value={genreFilter} onChange={(event) => setGenreFilter(event.target.value)} aria-label="Genre filter">
+               {genres.map((genre) => <option key={genre}>{genre}</option>)}
+             </select>
+             <select value={keyFilter} onChange={(event) => setKeyFilter(event.target.value)} aria-label="Key filter">
+               {keys.map((key) => <option key={key}>{key}</option>)}
+             </select>
+             <label>
+               Min BPM
+               <input type="number" min="40" max="260" value={bpmRange[0]} onChange={(event) => setBpmRange([Number(event.target.value), bpmRange[1]])} />
+             </label>
+             <label>
+               Max BPM
+               <input type="number" min="40" max="260" value={bpmRange[1]} onChange={(event) => setBpmRange([bpmRange[0], Number(event.target.value)])} />
+             </label>
+             <label>
+               Year
+               <input type="number" value={yearFilter ?? ''} onChange={(event) => { const val = event.target.value; setYearFilter(val === '' ? null : val); }} />
+             </label>
+             <label>
+               Track #
+               <input type="number" value={trackFilter ?? ''} onChange={(event) => { const val = event.target.value; setTrackFilter(val === '' ? null : val); }} />
+             </label>
+             <label>
+               Comment
+               <input type="text" value={commentFilter ?? ''} onChange={(event) => { const val = event.target.value; setCommentFilter(val === '' ? null : val); }} />
+             </label>
+             <label>
+               ISRC
+               <input type="text" value={isrcFilter ?? ''} onChange={(event) => { const val = event.target.value; setIsrcFilter(val === '' ? null : val); }} />
+             </label>
+             <label>
+               Album
+               <input type="text" value={albumFilter ?? ''} onChange={(event) => { const val = event.target.value; setAlbumFilter(val === '' ? null : val); }} />
+             </label>
+             <label>
+               Album Artist
+               <input type="text" value={albumArtistFilter ?? ''} onChange={(event) => { const val = event.target.value; setAlbumArtistFilter(val === '' ? null : val); }} />
+             </label>
+             <label>
+               Label
+               <input type="text" value={labelFilter ?? ''} onChange={(event) => { const val = event.target.value; setLabelFilter(val === '' ? null : val); }} />
+             </label>
+             <label>
+               Catalog
+               <input type="text" value={catalogFilter ?? ''} onChange={(event) => { const val = event.target.value; setCatalogFilter(val === '' ? null : val); }} />
+             </label>
+           </div>
           <button className="ghost-button" onClick={() => setToast("Smart filter matched harmonic, lossless, and energy constraints")}><SlidersHorizontal size={17} /> Smart Filter</button>
         </section>
 
@@ -622,20 +673,20 @@ function App() {
         <div className="toast" role="status">{toast}</div>
       </section>
 
-      <Inspector
-        compatibleKeys={compatibleKeys}
-        editing={editing}
-        onAutoClean={autoClean}
-        onAddFolder={() => void openFolderPicker()}
-        onAnalyze={() => void analyzeSelected()}
-        onEdit={() => setEditing(true)}
-        onScanLibrary={() => void openFolderPicker()}
-        onSave={(patch) => {
-          updateSelected(patch);
-          setEditing(false);
-        }}
-        selected={selected}
-      />
+        <Inspector
+          compatibleKeys={compatibleKeys}
+          editing={editing}
+          onAutoClean={autoClean}
+          onAddFolder={() => void openFolderPicker()}
+          onAnalyze={() => void analyzeSelected()}
+          onEdit={() => setEditing(true)}
+          onScanLibrary={() => void startScan()}
+          onSave={(patch) => {
+            updateSelected(patch);
+            setEditing(false);
+          }}
+          selected={selected}
+        />
     </main>
   );
 }
@@ -890,25 +941,25 @@ function FirstRunState({ title, body }: { title: string; body: string }) {
 }
 
 function Inspector({
-  compatibleKeys,
-  editing,
-  onAutoClean,
-  onAddFolder,
-  onAnalyze,
-  onEdit,
-  onScanLibrary,
-  onSave,
-  selected
+    compatibleKeys,
+    editing,
+    onAutoClean,
+    onAddFolder,
+    onAnalyze,
+    onEdit,
+    onScanLibrary,
+    onSave,
+    selected
 }: {
-  compatibleKeys: string[];
-  editing: boolean;
-  onAutoClean: () => void;
-  onAddFolder: () => void;
-  onAnalyze: () => void;
-  onEdit: () => void;
-  onScanLibrary: () => void;
-  onSave: (patch: Partial<Track>) => void;
-  selected?: Track;
+    compatibleKeys: string[];
+    editing: boolean;
+    onAutoClean: () => void;
+    onAddFolder: () => void;
+    onAnalyze: () => void;
+    onEdit: () => void;
+    onScanLibrary: () => void;
+    onSave: (patch: Partial<Track>) => void;
+    selected?: Track;
 }) {
   const [draft, setDraft] = useState<Track | undefined>(selected);
 
@@ -927,10 +978,10 @@ function Inspector({
           <h2>No track selected</h2>
           <p>Scan your music collection to inspect metadata, waveform, BPM, musical key, cue points, and tag quality.</p>
         </div>
-        <div className="inspector-actions single-column">
-          <button onClick={onAddFolder}><FolderPlus size={17} /> Add Watch Folder</button>
-          <button onClick={onScanLibrary}><RefreshCw size={17} /> Scan Library</button>
-        </div>
+          <div className="inspector-actions single-column">
+            <button onClick={onAddFolder}><FolderPlus size={17} /> Add Watch Folder</button>
+            <button onClick={onScanLibrary}><RefreshCw size={17} /> Scan Library</button>
+          </div>
         <div className="ai-box">
           <Sparkles size={18} />
           <p>Once tracks are indexed, Pulsecrate will suggest genre, mood, harmonic matches, cleanup actions, and duplicate candidates.</p>
@@ -960,26 +1011,42 @@ function Inspector({
           <i key={index} style={{ height: `${18 + ((index * 17 + selected.energy) % 72)}%` }} />
         ))}
       </div>
-      {editing ? (
-        <div className="edit-form">
-          <label>Title<input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
-          <label>Artist<input value={draft.artist} onChange={(event) => setDraft({ ...draft, artist: event.target.value })} /></label>
-          <label>Genre<input value={draft.genre} onChange={(event) => setDraft({ ...draft, genre: event.target.value })} /></label>
-          <label>BPM<input type="number" value={draft.bpm} onChange={(event) => setDraft({ ...draft, bpm: Number(event.target.value) })} /></label>
-          <label>Key<input value={draft.openKey} onChange={(event) => setDraft({ ...draft, openKey: event.target.value })} /></label>
-          <label>Energy<input type="number" min="0" max="100" value={draft.energy} onChange={(event) => setDraft({ ...draft, energy: Number(event.target.value) })} /></label>
-          <button className="primary-button" onClick={() => onSave(draft)}><Save size={17} /> Save Tags</button>
-        </div>
-      ) : (
-        <>
-          <div className="tag-grid">
-            <Tag label="BPM" value={`${selected.bpm} (${selected.confidence}%)`} />
-            <Tag label="Key" value={`${selected.openKey} / ${selected.key}`} />
-            <Tag label="Mood" value={selected.mood} />
-            <Tag label="Bitrate" value={selected.bitrate} />
-            <Tag label="Duration" value={selected.duration} />
-            <Tag label="Rating" value={"*".repeat(selected.rating)} />
+        {editing ? (
+          <div className="edit-form">
+            <label>Title<input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
+            <label>Artist<input value={draft.artist} onChange={(event) => setDraft({ ...draft, artist: event.target.value })} /></label>
+            <label>Genre<input value={draft.genre} onChange={(event) => setDraft({ ...draft, genre: event.target.value })} /></label>
+            <label>BPM<input type="number" value={draft.bpm} onChange={(event) => setDraft({ ...draft, bpm: Number(event.target.value) })} /></label>
+            <label>Key<input value={draft.openKey} onChange={(event) => setDraft({ ...draft, openKey: event.target.value })} /></label>
+            <label>Energy<input type="number" min="0" max="100" value={draft.energy} onChange={(event) => setDraft({ ...draft, energy: Number(event.target.value) })} /></label>
+            <label>Year<input type="number" value={draft.tag_year ?? ''} onChange={(event) => { const val = event.target.value; setDraft({ ...draft, tag_year: val === '' ? null : parseInt(val, 10) }); }} /></label>
+            <label>Track #<input type="number" value={draft.tag_track_number ?? ''} onChange={(event) => { const val = event.target.value; setDraft({ ...draft, tag_track_number: val === '' ? null : parseInt(val, 10) }); }} /></label>
+            <label>Comment<input value={draft.tag_comment ?? ''} onChange={(event) => setDraft({ ...draft, tag_comment: event.target.value || null })} /></label>
+            <label>ISRC<input value={draft.tag_isrc ?? ''} onChange={(event) => setDraft({ ...draft, tag_isrc: event.target.value || null })} /></label>
+            <label>Album<input value={draft.tag_album ?? ''} onChange={(event) => setDraft({ ...draft, tag_album: event.target.value || null })} /></label>
+            <label>Album Artist<input value={draft.tag_album_artist ?? ''} onChange={(event) => setDraft({ ...draft, tag_album_artist: event.target.value || null })} /></label>
+            <label>Label<input value={draft.tag_label ?? ''} onChange={(event) => setDraft({ ...draft, tag_label: event.target.value || null })} /></label>
+            <label>Catalog<input value={draft.tag_catalog ?? ''} onChange={(event) => setDraft({ ...draft, tag_catalog: event.target.value || null })} /></label>
+            <button className="primary-button" onClick={() => onSave(draft)}><Save size={17} /> Save Tags</button>
           </div>
+        ) : (
+        <>
+        <div className="tag-grid">
+          <Tag label="BPM" value={`${selected.bpm} (${selected.confidence}%)`} />
+          <Tag label="Key" value={`${selected.openKey} / ${selected.key}`} />
+          <Tag label="Mood" value={selected.mood} />
+          <Tag label="Bitrate" value={selected.bitrate} />
+          <Tag label="Duration" value={selected.duration} />
+          <Tag label="Rating" value={"*".repeat(selected.rating)} />
+          <Tag label="Year" value={selected.tag_year != null ? String(selected.tag_year) : '—'} />
+          <Tag label="Track" value={selected.tag_track_number != null ? String(selected.tag_track_number) : '—'} />
+          <Tag label="Comment" value={selected.tag_comment ?? '—'} />
+          <Tag label="ISRC" value={selected.tag_isrc ?? '—'} />
+          <Tag label="Album" value={selected.tag_album ?? '—'} />
+          <Tag label="Album Artist" value={selected.tag_album_artist ?? '—'} />
+          <Tag label="Label" value={selected.tag_label ?? '—'} />
+          <Tag label="Catalog" value={selected.tag_catalog ?? '—'} />
+        </div>
           <div className="tag-cloud">
             {selected.tags.map((tag) => <span key={tag}>{tag}</span>)}
           </div>
@@ -1061,30 +1128,42 @@ function createTracksFromFiles(files: PickedAudioFile[]): Track[] {
     const extension = getExtension(file.name);
     const parsed = parseTrackName(file.name);
 
-    return {
-      id: `PC-${Date.now().toString(36)}-${index.toString(36)}`,
-      title: parsed.title,
-      artist: parsed.artist,
-      album: "",
-      genre: "Unsorted",
-      label: "",
-      catalog: "",
-      bpm: 0,
-      key: "Unknown",
-      openKey: "Unknown",
-      duration: "--:--",
-      energy: 0,
-      rating: 0,
-      fileType: extension.toUpperCase(),
-      bitrate: "Pending",
-      confidence: 0,
-      path,
-      mood: "Unsorted",
-      tags: [],
-      color: "#55d6ff",
-      status: "Needs tags",
-      dateAdded: today
-    };
+     return {
+       id: `PC-${Date.now().toString(36)}-${index.toString(36)}`,
+       title: parsed.title,
+       artist: parsed.artist,
+       album: "",
+       genre: "Unsorted",
+       label: "",
+       catalog: "",
+       bpm: 0,
+       key: "Unknown",
+       openKey: "Unknown",
+       duration: "--:--",
+       energy: 0,
+       rating: 0,
+       fileType: extension.toUpperCase(),
+       bitrate: "Pending",
+       confidence: 0,
+       path,
+       mood: "Unsorted",
+       tags: [],
+       color: "#55d6ff",
+       status: "Needs tags",
+       dateAdded: today,
+       tag_title: null,
+       tag_artist: null,
+       tag_album: null,
+       tag_album_artist: null,
+       tag_genre: null,
+       tag_label: null,
+       tag_catalog: null,
+       tag_year: null,
+       tag_track_number: null,
+       tag_comment: null,
+       tag_isrc: null,
+       tag_bpm: null
+     };
   });
 }
 
@@ -1116,7 +1195,19 @@ function createTracksFromNativeFiles(files: NativeScannedAudioFile[]): Track[] {
       tags: ["native-path"],
       color: "#55d6ff",
       status: "Needs tags",
-      dateAdded: today
+      dateAdded: today,
+      tag_title: null,
+      tag_artist: null,
+      tag_album: null,
+      tag_album_artist: null,
+      tag_genre: null,
+      tag_label: null,
+      tag_catalog: null,
+      tag_year: null,
+      tag_track_number: null,
+      tag_comment: null,
+      tag_isrc: null,
+      tag_bpm: null
     };
   });
 }
@@ -1182,7 +1273,6 @@ async function analyzeTrackWithBestEngine(track: Track): Promise<Track> {
       // Surface missing-ffmpeg errors as a permanent status rather than silently
       // falling back and reporting "Native analysis complete" on the toast.
       if (msg.toLowerCase().includes("ffmpeg") || msg.toLowerCase().includes("ffprobe")) {
-        console.error("FFmpeg not available:", msg);
         return {
           ...track,
           status: "Missing",
@@ -1191,6 +1281,8 @@ async function analyzeTrackWithBestEngine(track: Track): Promise<Track> {
       }
       console.warn("Native analysis failed, using provisional analyzer:", msg);
     }
+  } else {
+    console.debug("Skipping native analysis due to path issue:", track.path);
   }
 
   return analyzeTrack(track);
@@ -1226,39 +1318,89 @@ function applyNativeAnalysis(track: Track, result: NativeAnalysisResult): Track 
   if (result.tag_catalog) extraTags.push(`cat:${result.tag_catalog}`);
   if (result.tag_comment?.trim()) extraTags.push("has-comment");
 
-  return {
-    ...track,
-    // Signal-derived fields
-    bpm: Math.round(result.bpm),
-    confidence: Math.round(result.bpm_confidence),
-    energy: result.energy ?? track.energy,
-    key: result.classical_key,
-    openKey: result.camelot_key || result.open_key,
-    // Technical probe fields
-    bitrate: result.bitrate ? `${Math.round(result.bitrate / 1000)} kbps` : track.bitrate,
-    duration: result.duration_ms ? formatDuration(result.duration_ms) : track.duration,
-    fileType,
-    // Embedded tag fields — tag wins over filename-parsed placeholders
-    title: tagOr(result.tag_title, track.title),
-    artist: tagOr(result.tag_artist, track.artist),
-    album: tagOr(result.tag_album, track.album),
-    genre: tagOr(result.tag_genre, track.genre),
-    label,
-    catalog: tagOr(result.tag_catalog, track.catalog),
-    // Mood stays "Analyzed" if not previously set; genre drives mood in the
-    // provisional analyser but real tags don't carry a mood field.
-    mood: track.mood === "Unsorted" ? "Analyzed" : track.mood,
-    status: "Ready",
-    tags: Array.from(new Set([...track.tags, ...extraTags])),
-  };
+   return {
+     ...track,
+     // Signal-derived fields
+     bpm: Math.round(result.bpm),
+     confidence: Math.round(result.bpm_confidence),
+     energy: result.energy ?? track.energy,
+     key: result.classical_key,
+     openKey: result.camelot_key || result.open_key,
+     // Technical probe fields
+     bitrate: result.bitrate ? `${Math.round(result.bitrate / 1000)} kbps` : track.bitrate,
+     duration: result.duration_ms ? formatDuration(result.duration_ms) : track.duration,
+     fileType,
+     // Embedded tag fields — tag wins over filename-parsed placeholders
+     title: tagOr(result.tag_title, track.title),
+     artist: tagOr(result.tag_artist, track.artist),
+     album: tagOr(result.tag_album, track.album),
+     genre: tagOr(result.tag_genre, track.genre),
+     label,
+     catalog: tagOr(result.tag_catalog, track.catalog),
+     // Mood stays "Analyzed" if not previously set; genre drives mood in the
+     // provisional analyser but real tags don't carry a mood field.
+     mood: track.mood === "Unsorted" ? "Analyzed" : track.mood,
+     status: "Ready",
+     tags: Array.from(new Set([...track.tags, ...extraTags])),
+     // Store raw tag values
+     tag_title: result.tag_title,
+     tag_artist: result.tag_artist,
+     tag_album: result.tag_album,
+     tag_album_artist: result.tag_album_artist,
+     tag_genre: result.tag_genre,
+     tag_label: result.tag_label,
+     tag_catalog: result.tag_catalog,
+     tag_year: result.tag_year,
+     tag_track_number: result.tag_track_number,
+     tag_comment: result.tag_comment,
+     tag_isrc: result.tag_isrc,
+     tag_bpm: result.tag_bpm,
+   };
 }
 
 function isTauriRuntime() {
-  return Boolean((window as WindowWithDirectoryPicker).__TAURI_INTERNALS__);
+  const win = window as any;
+  return Boolean(win.__TAURI_INTERNALS__ || win.__TAURI__);
 }
 
 function isBrowserRelativePath(path: string) {
-  return !path.startsWith("/") && !path.match(/^[a-zA-Z]:[\\/]/);
+  // Empty paths are always browser-relative (invalid)
+  if (!path) return true;
+  
+  // Check for obvious browser/resource paths that should not use native analysis
+  if (path.startsWith("http://") || 
+      path.startsWith("https://") || 
+      path.startsWith("data:") ||
+      path.startsWith("blob:") ||
+      path.startsWith("file://")) {
+    return true;
+  }
+  
+  // Paths starting with slash, Windows drive, or UNC are system paths
+  if (path.startsWith("/") || 
+      path.match(/^[a-zA-Z]:[\\/]/) || 
+      path.startsWith("\\\\")) {
+    return false;
+  }
+  
+  // For Tauri apps, allow relative paths that look like valid file paths
+  // (no control characters, no directory traversal, reasonable length)
+  if (isTauriRuntime()) {
+    // Check for control characters (including null)
+    if (/[\u0000-\u001f\u007f]/.test(path)) return true;
+    
+    // Check for directory traversal attempts (basic)
+    if (path.includes("../") || path.includes("..\\")) return true;
+    
+    // Check for excessively long paths (likely not real file paths)
+    if (path.length > 1000) return true;
+    
+    // Otherwise, allow it as a potential relative file path
+    return false;
+  }
+  
+  // In browser, be more restrictive for security (no native analysis anyway)
+  return true;
 }
 
 function formatDuration(durationMs: number) {
